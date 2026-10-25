@@ -4,6 +4,33 @@ import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
 import type { Database, Tables, TablesInsert, Enums } from "@/types/supabase";
 
+type PeriodItem = { price?: { id?: string } | null };
+type PeriodField = 'current_period_start' | 'current_period_end';
+type PlanItem = (items: PeriodItem[]) => PeriodItem | undefined;
+
+// Typed like the removed field, which was also absent at runtime when Stripe omitted it.
+function subscriptionPeriod(subscription: object, field: PeriodField, planItem?: PlanItem): number {
+  const legacy: unknown = Reflect.get(subscription, field);
+  if (typeof legacy === 'number') return legacy;
+  const list: unknown = Reflect.get(subscription, 'items');
+  const data: unknown = list && typeof list === 'object' ? Reflect.get(list, 'data') : undefined;
+  const items = (Array.isArray(data) ? data : []).filter(
+    (item): item is PeriodItem => typeof item === 'object' && item !== null,
+  );
+  const periods = new Set(items.map((item) => Reflect.get(item, field)));
+  const chosen = periods.size === 1 ? items[0] : planItem?.(items);
+  const value: unknown = chosen ? Reflect.get(chosen, field) : undefined;
+  return (typeof value === 'number' ? value : undefined) as number;
+}
+
+function getSubscriptionPeriodStart(subscription: object, planItem?: PlanItem): number {
+  return subscriptionPeriod(subscription, 'current_period_start', planItem);
+}
+
+function getSubscriptionPeriodEnd(subscription: object, planItem?: PlanItem): number {
+  return subscriptionPeriod(subscription, 'current_period_end', planItem);
+}
+
 type Product = Tables<"products">;
 type Price = Tables<"prices">;
 
@@ -36,9 +63,9 @@ const upsertPriceRecord = async (price: Stripe.Price) => {
     active: price.active,
     currency: price.currency,
     description: price.nickname ?? null,
-    type: price.type,
+    type: (price.type as Extract<Stripe.Price.Type, 'one_time' | 'recurring'>),
     unit_amount: price.unit_amount ?? null,
-    interval: price.recurring?.interval ?? null,
+    interval: (price.recurring?.interval as Extract<Stripe.Price.Recurring.Interval, 'day' | 'month' | 'week' | 'year'> | undefined) ?? null,
     interval_count: price.recurring?.interval_count ?? null,
     trial_period_days: price.recurring?.trial_period_days ?? null,
     metadata: price.metadata,
@@ -172,7 +199,7 @@ const copyBillingDetailsToCustomer = async (
     .from("users")
     .update({
       billing_address: { ...address },
-      payment_method: { ...payment_method[payment_method.type] },
+      payment_method: { ...payment_method[payment_method.type as Extract<Stripe.PaymentMethod.Type, keyof Stripe.PaymentMethod>] },
     })
     .eq("id", uuid);
   if (error) throw error;
@@ -214,10 +241,10 @@ const manageSubscriptionStatusChange = async (
       ? toDateTime(subscription.canceled_at).toISOString()
       : null,
     current_period_start: toDateTime(
-      subscription.current_period_start,
+      (getSubscriptionPeriodStart(subscription, (items) => items[0])),
     ).toISOString(),
     current_period_end: toDateTime(
-      subscription.current_period_end,
+      (getSubscriptionPeriodEnd(subscription, (items) => items[0])),
     ).toISOString(),
     created: toDateTime(subscription.created).toISOString(),
     ended_at: subscription.ended_at

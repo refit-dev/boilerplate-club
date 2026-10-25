@@ -3,7 +3,7 @@ import { createOrRetrieveCustomer } from "@/lib/supabase/admin";
 import { getURL } from "@/lib/utils";
 
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2023-10-16",
+  apiVersion: "2026-09-30.endive",
   typescript: true,
 });
 
@@ -23,7 +23,7 @@ export async function getStripeSession(
   let session;
   if (type === "recurring") {
     session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
+      allowed_payment_method_types: ["card"],
       billing_address_collection: "required",
       customer,
       customer_update: {
@@ -45,7 +45,7 @@ export async function getStripeSession(
     });
   } else if (type === "one_time") {
     session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
+      allowed_payment_method_types: ["card"],
       billing_address_collection: "required",
       customer,
       customer_update: {
